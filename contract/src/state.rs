@@ -8,6 +8,7 @@ pub struct Config {
     pub mint_denom: String,
     pub fee_collector_addr: Addr,
     pub burn_fee: Decimal,
+    pub use_cw20: bool,
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");

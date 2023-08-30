@@ -1,16 +1,18 @@
 use crate::denom::{Coin, MsgCreateDenom, MsgMint};
 use crate::error::ContractError;
 use crate::msg::{
-    ConfigResponse, ExecuteMsg, InstantiateMsg, LeaderboardResponse, MigrateMsg, QueryMsg,
+    ConfigResponse, Cw20HookMsg, ExecuteMsg, InstantiateMsg, LeaderboardResponse, MigrateMsg,
+    QueryMsg,
 };
 use crate::state::{Config, CONFIG, LEADERBOARD};
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    coins, to_binary, Addr, BankMsg, Binary, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Order,
-    Response, StdResult, Uint128, Decimal,
+    coins, from_binary, to_binary, Addr, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env,
+    MessageInfo, Order, Response, StdResult, Uint128,
 };
 use cw2::{get_contract_version, set_contract_version};
+use cw20::Cw20ReceiveMsg;
 use cw_storage_plus::Bound;
 use semver::Version;
 
@@ -31,18 +33,32 @@ pub fn instantiate(
     let config = Config {
         owner: deps.api.addr_validate(info.sender.as_str())?,
         mint_denom: format!("{}/{}/{}", "factory", env.contract.address, MINT_SYMBOL),
+        use_cw20: msg.use_cw20.unwrap_or(false),
         fee_collector_addr: deps.api.addr_validate(&msg.fee_collector_addr)?,
         burn_fee: msg.burn_fee.unwrap_or(DEFAULT_BURN_FEE),
     };
 
-    CONFIG.save(deps.storage, &config)?;
+    // If msg.use_cw20 is true, we will use the LP token technique
+    // Otherwise we will use CreateDenom, if tokenfactory is not available you should use_cw20
+   
+    let mut messages: Vec<CosmosMsg> = vec![];
 
-    Ok(
-        Response::new().add_message(<MsgCreateDenom as Into<CosmosMsg>>::into(MsgCreateDenom {
-            sender: env.contract.address.to_string(),
-            subdenom: MINT_SYMBOL.to_string(),
-        })),
-    )
+    match msg.use_cw20.unwrap_or(false) {
+        true => {
+            messages.push(<MsgCreateDenom as Into<CosmosMsg>>::into(MsgCreateDenom {
+                sender: env.contract.address.to_string(),
+                subdenom: MINT_SYMBOL.to_string(),
+            }));
+        },
+        false => {
+            messages.push(<MsgCreateDenom as Into<CosmosMsg>>::into(MsgCreateDenom {
+                sender: env.contract.address.to_string(),
+                subdenom: MINT_SYMBOL.to_string(),
+            }));
+        }
+    }
+    CONFIG.save(deps.storage, &config)?;
+    Ok(Response::new().add_messages(messages))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -53,8 +69,26 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::UpdateConfig { owner, fee_collector_addr, burn_fee } => update_config(deps, info, owner, fee_collector_addr, burn_fee),
-        ExecuteMsg::Burn {} => burn(deps, env, info),
+        ExecuteMsg::Receive(msg) => receive_cw20(deps, env, info, msg),
+        ExecuteMsg::UpdateConfig {
+            owner,
+            fee_collector_addr,
+            burn_fee,
+        } => update_config(deps, info, owner, fee_collector_addr, burn_fee),
+        ExecuteMsg::Burn {} => burn(deps, env, info, None),
+    }
+}
+
+/// Updates the contract's [Config]
+pub fn receive_cw20(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    cw20_msg: Cw20ReceiveMsg,
+) -> Result<Response, ContractError> {
+    match from_binary(&cw20_msg.msg) {
+        Ok(Cw20HookMsg::Burn_cw20 {}) => burn(deps, env, info, Some(cw20_msg)),
+        Err(err) => Err(ContractError::Std(err)),
     }
 }
 
@@ -85,7 +119,7 @@ pub fn update_config(
 
     if let Some(burn_fee) = burn_fee {
         // Note there is no real validation on bounds for this
-        // This would be an info issue in audit. 
+        // This would be an info issue in audit.
         // To remedy, someone needs to specify and upper and lower bound and it needs to be enforced here
         // Given the burn fee is inflationary, it is not a huge concern as it will only affect the ash token
         config.burn_fee = burn_fee;
@@ -95,24 +129,91 @@ pub fn update_config(
     Ok(Response::new().add_attribute("action", "update_config"))
 }
 
-pub fn burn(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
+pub fn burn(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    cw20_msg: Option<Cw20ReceiveMsg>,
+) -> Result<Response, ContractError> {
     //check the only one token is sent
-    if info.funds.len() != 1 {
-        return Err(ContractError::IncorrectTokenQuantity {});
-    }
-
-    //Only burn whale tokens
-    if info.funds[0].denom != "uwhale" {
-        return Err(ContractError::IncorrectToken {});
-    }
     let config: Config = CONFIG.load(deps.storage)?;
-    let mut messages: Vec<CosmosMsg> = vec![];
-    let amount = info.funds[0].amount;
 
-    //burn the whale sent
+    match config.use_cw20 {
+        true => {}
+        false => {
+            if info.funds.len() != 1 {
+                return Err(ContractError::IncorrectTokenQuantity {});
+            }
+            //Only burn whale tokens
+            if info.funds[0].denom != "uwhale" {
+                return Err(ContractError::IncorrectToken {});
+            }
+        }
+    }
+    let mut messages: Vec<CosmosMsg> = vec![];
     messages.push(CosmosMsg::from(BankMsg::Burn {
         amount: info.funds.clone(),
     }));
+    // Big deviation here lets break it down, end result we want the amount burned and all the messages ready
+    // If using cw20 (first case) we will need to use the CW20 spec and rely on the token address being stored in Config
+    // Otherwise we are proceeding as normal using Native tokens and minting 
+    let (amount, ash_amount) = match config.use_cw20 {
+        true => {
+            let provided_amount = cw20_msg.unwrap().amount;
+
+            // But dont return, after this we are going to mint the amount to the sender
+            if config.fee_collector_addr != Addr::unchecked("") {
+                let fee = provided_amount * config.burn_fee;
+                let fee_amount = coins(fee.u128(), config.mint_denom.as_str());
+                messages.push(CosmosMsg::Bank(BankMsg::Send {
+                    to_address: config.fee_collector_addr.to_string(),
+                    amount: fee_amount.clone(),
+                }));
+            }
+
+            let ash_amount = coins(provided_amount.u128(), config.mint_denom.as_str());
+
+            (provided_amount, ash_amount)
+        }
+        false => {
+            if info.funds.len() != 1 {
+                return Err(ContractError::IncorrectTokenQuantity {});
+            }
+            //Only burn whale tokens
+            if info.funds[0].denom != "uwhale" {
+                return Err(ContractError::IncorrectToken {});
+            }
+
+            let amount = info.funds[0].amount;
+
+            // If the fee_collect_addr is set, inflate the amount to mint, send the difference (fee) to the fee_collector_addr
+            // But dont return, after this we are going to mint the amount to the sender
+            if config.fee_collector_addr != Addr::unchecked("") {
+                let fee = amount * config.burn_fee;
+                let fee_amount = coins(fee.u128(), config.mint_denom.as_str());
+                messages.push(CosmosMsg::Bank(BankMsg::Send {
+                    to_address: config.fee_collector_addr.to_string(),
+                    amount: fee_amount.clone(),
+                }));
+            }
+
+            //mint ASH and transfer to sender
+            messages.push(<MsgMint as Into<CosmosMsg>>::into(MsgMint {
+                sender: env.contract.address.to_string(),
+                amount: Some(Coin {
+                    denom: config.mint_denom.clone(),
+                    amount: amount.to_string(),
+                }),
+            }));
+            let ash_amount = coins(amount.u128(), config.mint_denom.as_str());
+            messages.push(CosmosMsg::Bank(BankMsg::Send {
+                to_address: info.sender.to_string(),
+                amount: ash_amount.clone(),
+            }));
+            (amount, ash_amount)
+        }
+    };
+    
 
     let amount_burnt_by_sender = LEADERBOARD.may_load(deps.storage, &info.sender)?;
     if let Some(amount_burnt_by_sender) = amount_burnt_by_sender {
@@ -124,31 +225,6 @@ pub fn burn(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, Cont
     } else {
         LEADERBOARD.save(deps.storage, &info.sender, &amount)?;
     }
-
-    // If the fee_collect_addr is set, inflate the amount to mint, send the difference (fee) to the fee_collector_addr
-    // But dont return, after this we are going to mint the amount to the sender
-    if config.fee_collector_addr != Addr::unchecked("") {
-        let fee = amount * config.burn_fee;
-        let fee_amount = coins(fee.u128(), config.mint_denom.as_str());
-        messages.push(CosmosMsg::Bank(BankMsg::Send {
-            to_address: config.fee_collector_addr.to_string(),
-            amount: fee_amount.clone(),
-        }));
-    }
-
-    //mint ASH and transfer to sender
-    messages.push(<MsgMint as Into<CosmosMsg>>::into(MsgMint {
-        sender: env.contract.address.to_string(),
-        amount: Some(Coin {
-            denom: config.mint_denom.clone(),
-            amount: amount.to_string(),
-        }),
-    }));
-    let ash_amount = coins(amount.u128(), config.mint_denom.as_str());
-    messages.push(CosmosMsg::Bank(BankMsg::Send {
-        to_address: info.sender.to_string(),
-        amount: ash_amount.clone(),
-    }));
 
     Ok(Response::new().add_messages(messages).add_attributes(vec![
         ("sender", info.sender.as_str()),
@@ -209,13 +285,15 @@ pub fn migrate(deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, Co
     let version: Version = CONTRACT_VERSION.parse()?;
     let storage_version: Version = get_contract_version(deps.storage)?.version.parse()?;
     let old_config = CONFIG.load(deps.storage)?; //load old config
-    let config = Config { // setup new one 
+    let config = Config {
+        // setup new one
         owner: old_config.owner,
         mint_denom: old_config.mint_denom,
-        // The new fee_collector_addr and burn fee need to be set in MigrateMsg when migrating 
+        // The new fee_collector_addr and burn fee need to be set in MigrateMsg when migrating
         // The burn fee is non optional rn just for simplicity when migrating
         fee_collector_addr: deps.api.addr_validate(&msg.fee_collector_addr)?,
         burn_fee: msg.burn_fee.unwrap_or(DEFAULT_BURN_FEE),
+        use_cw20: false,
     };
 
     CONFIG.save(deps.storage, &config)?;

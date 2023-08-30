@@ -32,6 +32,7 @@ fn proper_initialization() {
     let msg = InstantiateMsg {
         fee_collector_addr: "addr0000".to_string(),
         burn_fee: Some(Decimal::percent(1)),
+        use_cw20: None
     };
     let res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -69,6 +70,8 @@ fn burn_execute() {
     let msg = InstantiateMsg {
         fee_collector_addr: "addr0000".to_string(),
         burn_fee: Some(Decimal::percent(1)),
+        use_cw20: None,
+
     };
     let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -127,6 +130,8 @@ fn burn_invalid() {
     let msg = InstantiateMsg {
         fee_collector_addr: "addr0000".to_string(),
         burn_fee: Some(Decimal::percent(1)),
+        use_cw20: None,
+
     };
     let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -175,6 +180,8 @@ fn test_update_config() {
     let msg = InstantiateMsg {
         fee_collector_addr: "addr0000".to_string(),
         burn_fee: Some(Decimal::percent(1)),
+        use_cw20: None,
+
     };
     let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -224,6 +231,7 @@ fn test_leaderboard_query() {
     let msg = InstantiateMsg {
         fee_collector_addr: "addr0000".to_string(),
         burn_fee: Some(Decimal::percent(1)),
+        use_cw20: None,
     };
     instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -306,6 +314,8 @@ fn test_burn_tax_feature() {
     let msg = InstantiateMsg {
         fee_collector_addr: "addr0001".to_string(),
         burn_fee: Some(Decimal::percent(1)),
+        use_cw20: None,
+
     };
     let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
