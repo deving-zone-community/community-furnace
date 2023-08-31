@@ -1,18 +1,22 @@
 use crate::denom::{Coin, MsgCreateDenom, MsgMint};
 use crate::error::ContractError;
+use crate::helpers::{
+    build_burn_cw20_token_msg, build_mint_cw20_token_msg, build_transfer_cw20_token_msg,
+};
 use crate::msg::{
     ConfigResponse, Cw20HookMsg, ExecuteMsg, InstantiateMsg, LeaderboardResponse, MigrateMsg,
     QueryMsg,
 };
-use crate::state::{Config, CONFIG, LEADERBOARD};
+use crate::state::{Config, TokenInstantiateMsg, CONFIG, LEADERBOARD};
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    coins, from_binary, to_binary, Addr, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env,
-    MessageInfo, Order, Response, StdResult, Uint128,
+    coins, from_binary, instantiate2_address, to_binary, Addr, BankMsg, Binary, CodeInfoResponse,
+    CosmosMsg, Decimal, Deps, DepsMut, Env, MessageInfo, Order, Response, StdError, StdResult,
+    Uint128, WasmMsg,
 };
 use cw2::{get_contract_version, set_contract_version};
-use cw20::Cw20ReceiveMsg;
+use cw20::{Cw20ReceiveMsg, MinterResponse};
 use cw_storage_plus::Bound;
 use semver::Version;
 
@@ -30,26 +34,70 @@ pub fn instantiate(
 ) -> Result<Response, ContractError> {
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
-    let config = Config {
+    let mut config = Config {
         owner: deps.api.addr_validate(info.sender.as_str())?,
         mint_denom: format!("{}/{}/{}", "factory", env.contract.address, MINT_SYMBOL),
         use_cw20: msg.use_cw20.unwrap_or(false),
+        burn_cw20_addr: None,
         fee_collector_addr: deps.api.addr_validate(&msg.fee_collector_addr)?,
         burn_fee: msg.burn_fee.unwrap_or(DEFAULT_BURN_FEE),
     };
 
     // If msg.use_cw20 is true, we will use the LP token technique
     // Otherwise we will use CreateDenom, if tokenfactory is not available you should use_cw20
-   
+    match msg.burn_cw20_addr {
+        Some(burn_cw20_addr) => {
+            config.burn_cw20_addr = Some(deps.api.addr_validate(&burn_cw20_addr)?);
+        }
+        None => {}
+    }
     let mut messages: Vec<CosmosMsg> = vec![];
 
     match msg.use_cw20.unwrap_or(false) {
         true => {
-            messages.push(<MsgCreateDenom as Into<CosmosMsg>>::into(MsgCreateDenom {
-                sender: env.contract.address.to_string(),
-                subdenom: MINT_SYMBOL.to_string(),
-            }));
-        },
+            let ash_token_name = format!("ASH-{}", config.mint_denom);
+            // Create the LP token using instantiate2
+            let creator = deps.api.addr_canonicalize(env.contract.address.as_str())?;
+            let code_id = msg.token_code_id.unwrap_or(0);
+            let CodeInfoResponse { checksum, .. } = deps.querier.query_wasm_code_info(code_id)?;
+            let seed = format!(
+                "{}{}{}",
+                config.mint_denom,
+                info.sender.into_string(),
+                env.block.height
+            );
+            let salt = Binary::from(seed.as_bytes());
+            // let pool_lp_address = deps.api.addr_humanize(
+            //     &instantiate2_address(&checksum, &creator, &salt)
+            //         .map_err(|e| StdError::generic_err(e.to_string()))?,
+            // )?;
+            let pool_lp_address = Addr::unchecked(
+                &instantiate2_address(&checksum, &creator, &salt)
+                    .map_err(|e| StdError::generic_err(e.to_string()))?
+                    .to_string(),
+            );
+
+            let message = CosmosMsg::Wasm(WasmMsg::Instantiate2 {
+                admin: None,
+                code_id,
+                label: ash_token_name.to_owned(),
+                msg: to_binary(&TokenInstantiateMsg {
+                    name: ash_token_name,
+                    symbol: "ASH".to_string(),
+                    decimals: 6,
+                    initial_balances: vec![],
+                    mint: Some(MinterResponse {
+                        minter: env.contract.address.to_string(),
+                        cap: None,
+                    }),
+                })?,
+                funds: vec![],
+                salt,
+            });
+            messages.push(message);
+            // Overwrite mint_denom with the token address
+            config.mint_denom = pool_lp_address.to_string();
+        }
         false => {
             messages.push(<MsgCreateDenom as Into<CosmosMsg>>::into(MsgCreateDenom {
                 sender: env.contract.address.to_string(),
@@ -87,7 +135,7 @@ pub fn receive_cw20(
     cw20_msg: Cw20ReceiveMsg,
 ) -> Result<Response, ContractError> {
     match from_binary(&cw20_msg.msg) {
-        Ok(Cw20HookMsg::Burn_cw20 {}) => burn(deps, env, info, Some(cw20_msg)),
+        Ok(Cw20HookMsg::BurnCw20 {}) => burn(deps, env, info, Some(cw20_msg)),
         Err(err) => Err(ContractError::Std(err)),
     }
 }
@@ -129,6 +177,16 @@ pub fn update_config(
     Ok(Response::new().add_attribute("action", "update_config"))
 }
 
+/// Burns native tokens or CW20 tokens based on the contract's [Config] setup during instantiate
+/// If the contract is setup to use CW20 input tokens, the CW20 token address must be set in the config
+/// If the contract is setup to use native input tokens, the CW20 token address must not be set in the config
+/// If the contract is setup to mint native ASH tokens on burn, config.use_cw20 must be false
+/// If the contract is setup to mint CW20 ASH tokens on burn, config.use_cw20 must be true
+///
+/// In either case 3 main actions happen assuming good data
+/// 1. A burn message of the native input token (or cw20 if setup right)
+/// 2. A mint message of the native ASH token (or cw20 if setup right)
+/// 3. A transfer message of the native ASH token (or cw20 if setup right)
 pub fn burn(
     deps: DepsMut,
     env: Env,
@@ -138,9 +196,27 @@ pub fn burn(
     //check the only one token is sent
     let config: Config = CONFIG.load(deps.storage)?;
 
-    match config.use_cw20 {
-        true => {}
-        false => {
+    let mut messages: Vec<CosmosMsg> = vec![];
+
+    match config.burn_cw20_addr {
+        Some(burn_cw20_addr) => {
+            // If the BurnCw20_addr was set, we need to not check the 'funds'
+            // We can check the input amount from the cw20_msg
+            // If the BurnCw20_addr is set, we need to check the cw20_msg
+            if cw20_msg.is_none() {
+                return Err(ContractError::IncorrectTokenQuantity {});
+            }
+            let cw20_msg = cw20_msg.clone().unwrap();
+
+            if cw20_msg.amount.is_zero() {
+                return Err(ContractError::IncorrectTokenQuantity {});
+            }
+            messages.push(build_burn_cw20_token_msg(
+                burn_cw20_addr.to_string(),
+                cw20_msg.amount,
+            )?);
+        }
+        None => {
             if info.funds.len() != 1 {
                 return Err(ContractError::IncorrectTokenQuantity {});
             }
@@ -148,15 +224,14 @@ pub fn burn(
             if info.funds[0].denom != "uwhale" {
                 return Err(ContractError::IncorrectToken {});
             }
+            messages.push(CosmosMsg::from(BankMsg::Burn {
+                amount: info.funds.clone(),
+            }));
         }
     }
-    let mut messages: Vec<CosmosMsg> = vec![];
-    messages.push(CosmosMsg::from(BankMsg::Burn {
-        amount: info.funds.clone(),
-    }));
     // Big deviation here lets break it down, end result we want the amount burned and all the messages ready
     // If using cw20 (first case) we will need to use the CW20 spec and rely on the token address being stored in Config
-    // Otherwise we are proceeding as normal using Native tokens and minting 
+    // Otherwise we are proceeding as normal using Native tokens and minting
     let (amount, ash_amount) = match config.use_cw20 {
         true => {
             let provided_amount = cw20_msg.unwrap().amount;
@@ -164,22 +239,35 @@ pub fn burn(
             // But dont return, after this we are going to mint the amount to the sender
             if config.fee_collector_addr != Addr::unchecked("") {
                 let fee = provided_amount * config.burn_fee;
-                let fee_amount = coins(fee.u128(), config.mint_denom.as_str());
-                messages.push(CosmosMsg::Bank(BankMsg::Send {
-                    to_address: config.fee_collector_addr.to_string(),
-                    amount: fee_amount.clone(),
-                }));
+
+                messages.push(build_transfer_cw20_token_msg(
+                    config.fee_collector_addr.clone(),
+                    config.mint_denom.clone(),
+                    fee,
+                )?);
             }
 
             let ash_amount = coins(provided_amount.u128(), config.mint_denom.as_str());
 
+            // Now mint the ash to the sender, first do a CW20 Mint, this contract already has minter rights
+            messages.push(build_mint_cw20_token_msg(
+                env.contract.address,
+                config.mint_denom.clone(),
+                provided_amount,
+            )?);
+            // Now send ash to the sender
+            messages.push(build_transfer_cw20_token_msg(
+                info.sender.clone(),
+                config.mint_denom.clone(),
+                provided_amount,
+            )?);
             (provided_amount, ash_amount)
         }
         false => {
             if info.funds.len() != 1 {
                 return Err(ContractError::IncorrectTokenQuantity {});
             }
-            //Only burn whale tokens
+            //TODO: Remove or force user to set the native token denom on instantiate
             if info.funds[0].denom != "uwhale" {
                 return Err(ContractError::IncorrectToken {});
             }
@@ -213,7 +301,6 @@ pub fn burn(
             (amount, ash_amount)
         }
     };
-    
 
     let amount_burnt_by_sender = LEADERBOARD.may_load(deps.storage, &info.sender)?;
     if let Some(amount_burnt_by_sender) = amount_burnt_by_sender {
@@ -226,10 +313,19 @@ pub fn burn(
         LEADERBOARD.save(deps.storage, &info.sender, &amount)?;
     }
 
+    // If info.funds has an entry in 0 position, we are using native tokens return this asset otherwise the cw20 asset
+    let asset = match config.use_cw20 {
+        true => cosmwasm_std::Coin {
+            denom: config.mint_denom.clone(),
+            amount,
+        },
+        false => info.funds[0].clone(),
+    };
+
     Ok(Response::new().add_messages(messages).add_attributes(vec![
         ("sender", info.sender.as_str()),
         ("action", "burn"),
-        ("asset", &format!("{}", info.funds[0])),
+        ("asset", &format!("{}", asset)),
         ("action", "mint"),
         ("asset", &format!("{}", ash_amount[0])),
     ]))
@@ -294,6 +390,7 @@ pub fn migrate(deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, Co
         fee_collector_addr: deps.api.addr_validate(&msg.fee_collector_addr)?,
         burn_fee: msg.burn_fee.unwrap_or(DEFAULT_BURN_FEE),
         use_cw20: false,
+        burn_cw20_addr: None,
     };
 
     CONFIG.save(deps.storage, &config)?;
