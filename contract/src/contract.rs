@@ -399,7 +399,7 @@ pub fn migrate(deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, Co
         burn_fee: msg.burn_fee.unwrap_or(DEFAULT_BURN_FEE),
         use_cw20: false,
         burn_cw20_addr: None,
-        native_denom: "".to_string(),
+        native_denom: msg.native_denom.unwrap_or("".to_string()),
     };
 
     CONFIG.save(deps.storage, &config)?;

@@ -52,6 +52,7 @@ pub enum QueryMsg {
 pub struct MigrateMsg {
     pub fee_collector_addr: String,
     pub burn_fee: Option<Decimal>,
+    pub native_denom: Option<String>,
 }
 
 pub type ConfigResponse = Config;
