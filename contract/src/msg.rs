@@ -10,6 +10,7 @@ pub struct InstantiateMsg {
     pub use_cw20: Option<bool>,
     pub token_code_id: Option<u64>,
     pub burn_cw20_addr: Option<String>,
+    pub native_denom: Option<String>,
 }
 
 #[cw_serde]

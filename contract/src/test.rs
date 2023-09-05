@@ -33,6 +33,7 @@ fn proper_initialization() {
         use_cw20: None,
         token_code_id: None,
         burn_cw20_addr: None,
+        native_denom: Some("uwhale".to_string()),
     };
     let res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -73,6 +74,7 @@ fn burn_execute() {
         use_cw20: None,
         token_code_id: None,
         burn_cw20_addr: None,
+        native_denom: Some("uwhale".to_string()),
     };
     let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -153,6 +155,7 @@ fn burn_cw20_for_native_ash() {
         use_cw20: Some(true),
         token_code_id: Some(1u64),
         burn_cw20_addr: Some("mock_cw20".to_string()),
+        native_denom: Some("uwhale".to_string()),
     };
     let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -245,6 +248,7 @@ fn burn_execute_cw20_received() {
         use_cw20: Some(true),
         token_code_id: Some(1u64),
         burn_cw20_addr: None,
+        native_denom: Some("uwhale".to_string()),
     };
     let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -319,6 +323,7 @@ fn burn_invalid() {
         use_cw20: None,
         token_code_id: None,
         burn_cw20_addr: None,
+        native_denom: Some("uwhale".to_string()),
     };
     let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -370,6 +375,7 @@ fn test_update_config() {
         use_cw20: None,
         token_code_id: None,
         burn_cw20_addr: None,
+        native_denom: Some("uwhale".to_string()),
     };
     let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -422,6 +428,7 @@ fn test_leaderboard_query() {
         use_cw20: None,
         token_code_id: None,
         burn_cw20_addr: None,
+        native_denom: Some("uwhale".to_string()),
     };
     instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
@@ -507,6 +514,7 @@ fn test_burn_tax_feature() {
         use_cw20: None,
         token_code_id: None,
         burn_cw20_addr: None,
+        native_denom: Some("uwhale".to_string()),
     };
     let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 

@@ -39,6 +39,7 @@ pub fn instantiate(
         mint_denom: format!("{}/{}/{}", "factory", env.contract.address, MINT_SYMBOL),
         use_cw20: msg.use_cw20.unwrap_or(false),
         burn_cw20_addr: None,
+        native_denom: "".to_string(),
         fee_collector_addr: deps.api.addr_validate(&msg.fee_collector_addr)?,
         burn_fee: msg.burn_fee.unwrap_or(DEFAULT_BURN_FEE),
     };
@@ -49,7 +50,14 @@ pub fn instantiate(
         Some(burn_cw20_addr) => {
             config.burn_cw20_addr = Some(deps.api.addr_validate(&burn_cw20_addr)?);
         }
-        None => {}
+        None => match msg.native_denom {
+            Some(native_denom) => {
+                config.native_denom = native_denom;
+            }
+            None => {
+                return Err(ContractError::MissingNativeDenom {});
+            }
+        },
     }
     let mut messages: Vec<CosmosMsg> = vec![];
 
@@ -67,6 +75,7 @@ pub fn instantiate(
                 env.block.height
             );
             let salt = Binary::from(seed.as_bytes());
+            // TODO: RM this for the commented out stuff when there is better testing/mocking around CodeData and Instantiate2
             // let pool_lp_address = deps.api.addr_humanize(
             //     &instantiate2_address(&checksum, &creator, &salt)
             //         .map_err(|e| StdError::generic_err(e.to_string()))?,
@@ -82,8 +91,8 @@ pub fn instantiate(
                 code_id,
                 label: ash_token_name.to_owned(),
                 msg: to_binary(&TokenInstantiateMsg {
-                    name: ash_token_name,
-                    symbol: "ASH".to_string(),
+                    name: ash_token_name.clone(),
+                    symbol: format!("{ash_token_name}-ASH").to_string(),
                     decimals: 6,
                     initial_balances: vec![],
                     mint: Some(MinterResponse {
@@ -221,7 +230,7 @@ pub fn burn(
                 return Err(ContractError::IncorrectTokenQuantity {});
             }
             //Only burn whale tokens
-            if info.funds[0].denom != "uwhale" {
+            if info.funds[0].denom != config.native_denom {
                 return Err(ContractError::IncorrectToken {});
             }
             messages.push(CosmosMsg::from(BankMsg::Burn {
@@ -267,8 +276,7 @@ pub fn burn(
             if info.funds.len() != 1 {
                 return Err(ContractError::IncorrectTokenQuantity {});
             }
-            //TODO: Remove or force user to set the native token denom on instantiate
-            if info.funds[0].denom != "uwhale" {
+            if info.funds[0].denom != config.native_denom {
                 return Err(ContractError::IncorrectToken {});
             }
 
@@ -391,6 +399,7 @@ pub fn migrate(deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, Co
         burn_fee: msg.burn_fee.unwrap_or(DEFAULT_BURN_FEE),
         use_cw20: false,
         burn_cw20_addr: None,
+        native_denom: "".to_string(),
     };
 
     CONFIG.save(deps.storage, &config)?;

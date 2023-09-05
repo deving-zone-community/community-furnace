@@ -11,6 +11,7 @@ pub struct Config {
     pub burn_fee: Decimal,
     pub use_cw20: bool,
     pub burn_cw20_addr: Option<Addr>,
+    pub native_denom: String,
 }
 
 /// TokenContract InstantiateMsg
