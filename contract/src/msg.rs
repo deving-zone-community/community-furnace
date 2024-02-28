@@ -49,11 +49,7 @@ pub enum QueryMsg {
 }
 
 #[cw_serde]
-pub struct MigrateMsg {
-    pub fee_collector_addr: String,
-    pub burn_fee: Option<Decimal>,
-    pub native_denom: Option<String>,
-}
+pub struct MigrateMsg {}
 
 pub type ConfigResponse = Config;
 pub type LeaderboardResponse = Vec<(Addr, Uint128)>;
