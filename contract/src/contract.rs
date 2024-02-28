@@ -287,6 +287,15 @@ pub fn burn(
             if config.fee_collector_addr != Addr::unchecked("") {
                 let fee = amount * config.burn_fee;
                 let fee_amount = coins(fee.u128(), config.mint_denom.as_str());
+
+                messages.push(<MsgMint as Into<CosmosMsg>>::into(MsgMint {
+                    sender: env.contract.address.to_string(),
+                    amount: Some(Coin {
+                        denom: config.mint_denom.clone(),
+                        amount: fee.clone().to_string(),
+                    }),
+                }));
+
                 messages.push(CosmosMsg::Bank(BankMsg::Send {
                     to_address: config.fee_collector_addr.to_string(),
                     amount: fee_amount.clone(),
@@ -385,31 +394,14 @@ fn calc_range_start(start_after: Option<Addr>) -> Option<Vec<u8>> {
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn migrate(deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, ContractError> {
+pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
     let version: Version = CONTRACT_VERSION.parse()?;
     let storage_version: Version = get_contract_version(deps.storage)?.version.parse()?;
-    let old_config = CONFIG.load(deps.storage)?; //load old config
-    let config = Config {
-        // setup new one
-        owner: old_config.owner,
-        mint_denom: old_config.mint_denom,
-        // The new fee_collector_addr and burn fee need to be set in MigrateMsg when migrating
-        // The burn fee is non optional rn just for simplicity when migrating
-        fee_collector_addr: deps.api.addr_validate(&msg.fee_collector_addr)?,
-        burn_fee: msg.burn_fee.unwrap_or(DEFAULT_BURN_FEE),
-        use_cw20: false,
-        burn_cw20_addr: None,
-        native_denom: msg.native_denom.unwrap_or("".to_string()),
-    };
 
-    CONFIG.save(deps.storage, &config)?;
     if storage_version >= version {
         return Err(ContractError::Unauthorized {});
     }
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-
-    //fix addresses that had already burned whale into the contract
-    fill_missing_addresses(deps)?;
 
     Ok(Response::default().add_attributes(vec![("action", "migrate".to_string())]))
 }

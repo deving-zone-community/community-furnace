@@ -46,7 +46,7 @@ pub struct Coin {
     schemars::JsonSchema,
     CosmwasmExt,
 )]
-#[proto_message(type_url = "/cosmwasm.tokenfactory.v1beta1.MsgCreateDenom")]
+#[proto_message(type_url = "/osmosis.tokenfactory.v1beta1.MsgCreateDenom")]
 pub struct MsgCreateDenom {
     #[prost(string, tag = "1")]
     pub sender: ::prost::alloc::string::String,
@@ -67,7 +67,7 @@ pub struct MsgCreateDenom {
     schemars::JsonSchema,
     CosmwasmExt,
 )]
-#[proto_message(type_url = "/cosmwasm.tokenfactory.v1beta1.MsgCreateDenomResponse")]
+#[proto_message(type_url = "/osmosis.tokenfactory.v1beta1.MsgCreateDenomResponse")]
 pub struct MsgCreateDenomResponse {
     #[prost(string, tag = "1")]
     pub new_token_denom: ::prost::alloc::string::String,
@@ -85,7 +85,7 @@ pub struct MsgCreateDenomResponse {
     schemars::JsonSchema,
     CosmwasmExt,
 )]
-#[proto_message(type_url = "/cosmwasm.tokenfactory.v1beta1.MsgMint")]
+#[proto_message(type_url = "/osmosis.tokenfactory.v1beta1.MsgMint")]
 pub struct MsgMint {
     #[prost(string, tag = "1")]
     pub sender: ::prost::alloc::string::String,
@@ -103,7 +103,7 @@ pub struct MsgMint {
     schemars::JsonSchema,
     CosmwasmExt,
 )]
-#[proto_message(type_url = "/cosmwasm.tokenfactory.v1beta1.MsgMintResponse")]
+#[proto_message(type_url = "/osmosis.tokenfactory.v1beta1.MsgMintResponse")]
 pub struct MsgMintResponse {}
 
 /// MsgBurn is the sdk.Msg type for allowing an admin account to burn
@@ -118,7 +118,7 @@ pub struct MsgMintResponse {}
     schemars::JsonSchema,
     CosmwasmExt,
 )]
-#[proto_message(type_url = "/cosmwasm.tokenfactory.v1beta1.MsgBurn")]
+#[proto_message(type_url = "/osmosis.tokenfactory.v1beta1.MsgBurn")]
 pub struct MsgBurn {
     #[prost(string, tag = "1")]
     pub sender: ::prost::alloc::string::String,
@@ -136,5 +136,5 @@ pub struct MsgBurn {
     schemars::JsonSchema,
     CosmwasmExt,
 )]
-#[proto_message(type_url = "/cosmwasm.tokenfactory.v1beta1.MsgBurnResponse")]
+#[proto_message(type_url = "/osmosis.tokenfactory.v1beta1.MsgBurnResponse")]
 pub struct MsgBurnResponse {}
